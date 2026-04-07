@@ -34,6 +34,7 @@ app.get('/api/health', async (req, res) => {
   }
 });
  
+// ── PARENT SIGNUP ──
 app.post('/api/parent/signup', async (req, res) => {
   try {
     const { name, whatsapp, society, childClass, subject } = req.body;
@@ -50,6 +51,35 @@ app.post('/api/parent/signup', async (req, res) => {
   }
 });
  
+// ── PARENT LOGIN ──
+app.post('/api/parent/login', async (req, res) => {
+  try {
+    const { whatsapp } = req.body;
+    if (!whatsapp) return res.status(400).json({ success: false, message: 'WhatsApp number required!' });
+    const db = await connectDB();
+    const parent = await db.collection('parents').findOne({ whatsapp });
+    if (!parent) return res.status(404).json({ success: false, message: 'No account found with this number. Please register first.' });
+    res.json({ success: true, message: 'Login successful!', user: { id: parent._id, name: parent.name, whatsapp: parent.whatsapp, society: parent.society, childClass: parent.childClass, subject: parent.subject, status: parent.status, assignedTutorName: parent.assignedTutorName || null, assignedTutorWhatsapp: parent.assignedTutorWhatsapp || null, role: 'parent' } });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── TUTOR LOGIN ──
+app.post('/api/tutor/login', async (req, res) => {
+  try {
+    const { whatsapp } = req.body;
+    if (!whatsapp) return res.status(400).json({ success: false, message: 'WhatsApp number required!' });
+    const db = await connectDB();
+    const tutor = await db.collection('tutors').findOne({ whatsapp });
+    if (!tutor) return res.status(404).json({ success: false, message: 'No tutor account found with this number. Please register first.' });
+    res.json({ success: true, message: 'Login successful!', user: { id: tutor._id, name: tutor.name, whatsapp: tutor.whatsapp, college: tutor.college, branch: tutor.branch, subjects: tutor.subjects, society: tutor.society, verified: tutor.verified, rating: tutor.rating, totalSessions: tutor.totalSessions, role: 'tutor' } });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── TUTOR SIGNUP ──
 app.post('/api/tutor/signup', async (req, res) => {
   try {
     const { name, whatsapp, college, branch, subjects, society } = req.body;
@@ -69,6 +99,7 @@ app.post('/api/tutor/signup', async (req, res) => {
   }
 });
  
+// ── PUBLIC TUTOR LIST ──
 app.get('/api/tutors', async (req, res) => {
   try {
     const { society, subject } = req.query;
@@ -83,6 +114,9 @@ app.get('/api/tutors', async (req, res) => {
   }
 });
  
+// ─────────────────────────────────────────────
+// ADMIN ROUTES
+// ─────────────────────────────────────────────
 const ADMIN_KEY = process.env.ADMIN_SECRET || 'clarasta2025admin';
 function adminAuth(req, res, next) {
   if (req.headers['x-admin-key'] !== ADMIN_KEY)
@@ -90,28 +124,98 @@ function adminAuth(req, res, next) {
   next();
 }
  
+// ── ENHANCED DASHBOARD ──
 app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
   try {
     const db = await connectDB();
-    const [totalParents, pendingParents, totalTutors, verifiedTutors, recentParents, recentTutors] = await Promise.all([
+    const [
+      totalParents, pendingParents, matchedParents, activeSessions,
+      totalTutors, verifiedTutors,
+      recentParents, recentTutors
+    ] = await Promise.all([
       db.collection('parents').countDocuments(),
       db.collection('parents').countDocuments({ status: 'pending' }),
+      db.collection('parents').countDocuments({ status: 'matched' }),
+      db.collection('parents').countDocuments({ status: 'active' }),
       db.collection('tutors').countDocuments(),
       db.collection('tutors').countDocuments({ verified: true }),
-      db.collection('parents').find().sort({ createdAt: -1 }).limit(50).toArray(),
-      db.collection('tutors').find().sort({ createdAt: -1 }).limit(50).toArray()
+      db.collection('parents').find().sort({ createdAt: -1 }).limit(100).toArray(),
+      db.collection('tutors').find().sort({ createdAt: -1 }).limit(100).toArray()
     ]);
-    res.json({ success: true, stats: { totalParents, pendingParents, totalTutors, verifiedTutors }, recentParents, recentTutors });
+    res.json({
+      success: true,
+      stats: { totalParents, pendingParents, matchedParents, activeSessions, totalTutors, verifiedTutors },
+      recentParents,
+      recentTutors
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
 });
  
+// ── VERIFY TUTOR ──
 app.patch('/api/admin/tutor/:id/verify', adminAuth, async (req, res) => {
   try {
     const db = await connectDB();
-    await db.collection('tutors').updateOne({ _id: new ObjectId(req.params.id) }, { $set: { verified: true } });
+    await db.collection('tutors').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { verified: true, verifiedAt: new Date() } }
+    );
     res.json({ success: true, message: 'Tutor verified!' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── UNVERIFY TUTOR ──
+app.patch('/api/admin/tutor/:id/unverify', adminAuth, async (req, res) => {
+  try {
+    const db = await connectDB();
+    await db.collection('tutors').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { verified: false } }
+    );
+    res.json({ success: true, message: 'Tutor unverified!' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── DELETE TUTOR ──
+app.delete('/api/admin/tutor/:id', adminAuth, async (req, res) => {
+  try {
+    const db = await connectDB();
+    await db.collection('tutors').deleteOne({ _id: new ObjectId(req.params.id) });
+    res.json({ success: true, message: 'Tutor deleted!' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── UPDATE PARENT STATUS (pending / matched / active / closed) ──
+app.patch('/api/admin/parent/:id/status', adminAuth, async (req, res) => {
+  try {
+    const { status, assignedTutorName, assignedTutorWhatsapp } = req.body;
+    const db = await connectDB();
+    const update = { status, updatedAt: new Date() };
+    if (assignedTutorName) update.assignedTutorName = assignedTutorName;
+    if (assignedTutorWhatsapp) update.assignedTutorWhatsapp = assignedTutorWhatsapp;
+    await db.collection('parents').updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: update }
+    );
+    res.json({ success: true, message: `Status updated to ${status}!` });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── DELETE PARENT ──
+app.delete('/api/admin/parent/:id', adminAuth, async (req, res) => {
+  try {
+    const db = await connectDB();
+    await db.collection('parents').deleteOne({ _id: new ObjectId(req.params.id) });
+    res.json({ success: true, message: 'Parent deleted!' });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
