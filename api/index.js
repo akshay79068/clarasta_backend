@@ -220,5 +220,73 @@ app.delete('/api/admin/parent/:id', adminAuth, async (req, res) => {
     res.status(500).json({ success: false, message: e.message });
   }
 });
- 
+
+// ─────────────────────────────────────────────
+// CHAT ROUTES
+// ─────────────────────────────────────────────
+
+// ── SEND MESSAGE ──
+app.post('/api/chat/send', async (req, res) => {
+  try {
+    const { roomId, senderWa, senderName, senderRole, receiverWa, text, urgent } = req.body;
+    if (!roomId || !senderWa || !text)
+      return res.status(400).json({ success: false, message: 'roomId, senderWa, text required!' });
+    const db = await connectDB();
+    const msg = {
+      roomId,
+      senderWa,
+      senderName: senderName || 'Unknown',
+      senderRole: senderRole || 'user',
+      receiverWa: receiverWa || null,
+      text,
+      urgent: urgent === true || urgent === 'true',
+      sentAt: new Date()
+    };
+    const result = await db.collection('chats').insertOne(msg);
+    res.json({ success: true, messageId: result.insertedId, sentAt: msg.sentAt });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── GET MESSAGES FOR A ROOM ──
+app.get('/api/chat/:roomId', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+    const after = req.query.after ? new Date(req.query.after) : null;
+    const db = await connectDB();
+    const query = { roomId };
+    if (after) query.sentAt = { $gt: after };
+    const messages = await db.collection('chats')
+      .find(query).sort({ sentAt: 1 }).limit(limit).toArray();
+    res.json({ success: true, count: messages.length, data: messages });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── GET ALL CHAT ROOMS FOR A USER ──
+app.get('/api/chat/rooms/:waNumber', async (req, res) => {
+  try {
+    const { waNumber } = req.params;
+    const db = await connectDB();
+    const rooms = await db.collection('chats').aggregate([
+      { $match: { $or: [{ senderWa: waNumber }, { receiverWa: waNumber }] } },
+      { $sort: { sentAt: -1 } },
+      { $group: {
+          _id: '$roomId',
+          lastMessage: { $first: '$text' },
+          lastSender: { $first: '$senderName' },
+          lastTime: { $first: '$sentAt' },
+          urgent: { $first: '$urgent' }
+      }},
+      { $sort: { lastTime: -1 } }
+    ]).toArray();
+    res.json({ success: true, count: rooms.length, data: rooms });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 module.exports = app;
